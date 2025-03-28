@@ -17,6 +17,10 @@ pub const SIGNATURE_OFFSETS_SERIALIZED_SIZE: usize = 14;
 pub const SIGNATURE_OFFSETS_START: usize = 2;
 pub const DATA_START: usize = SIGNATURE_OFFSETS_SERIALIZED_SIZE + SIGNATURE_OFFSETS_START;
 
+//use solana_sdk::instruction::Instruction;
+use solana_sdk::ed25519_program;
+use ed25519_dalek::{PublicKey, Signature as OtherSignature};
+
 #[derive(Default, Debug, Copy, Clone, Zeroable, Pod, Eq, PartialEq)]
 #[repr(C)]
 pub struct Ed25519SignatureOffsets {
@@ -81,6 +85,67 @@ pub fn new_ed25519_instruction(keypair: &ed25519_dalek::Keypair, message: &[u8])
         data: instruction_data,
     }
 }
+
+pub fn new_ed25519_instruction_with_signature(
+    signature: &OtherSignature,
+    message: &[u8],
+    pubkey: &PublicKey,
+) -> Instruction {
+    // Convert signature and pubkey into their byte representations.
+    let signature_bytes = signature.to_bytes();
+    let pubkey_bytes = pubkey.to_bytes();
+
+    assert_eq!(pubkey_bytes.len(), PUBKEY_SERIALIZED_SIZE);
+    assert_eq!(signature_bytes.len(), SIGNATURE_SERIALIZED_SIZE);
+
+    let mut instruction_data = Vec::with_capacity(
+        DATA_START
+            .saturating_add(SIGNATURE_SERIALIZED_SIZE)
+            .saturating_add(PUBKEY_SERIALIZED_SIZE)
+            .saturating_add(message.len()),
+    );
+
+    let num_signatures: u8 = 1;
+    let public_key_offset = DATA_START;
+    let signature_offset = public_key_offset.saturating_add(PUBKEY_SERIALIZED_SIZE);
+    let message_data_offset = signature_offset.saturating_add(SIGNATURE_SERIALIZED_SIZE);
+
+    // add padding byte so that offset structure is aligned
+    instruction_data.extend_from_slice(bytes_of(&[num_signatures, 0]));
+
+    let offsets = Ed25519SignatureOffsets {
+        signature_offset: signature_offset as u16,
+        signature_instruction_index: u16::MAX,
+        public_key_offset: public_key_offset as u16,
+        public_key_instruction_index: u16::MAX,
+        message_data_offset: message_data_offset as u16,
+        message_data_size: message.len() as u16,
+        message_instruction_index: u16::MAX,
+    };
+
+    instruction_data.extend_from_slice(bytes_of(&offsets));
+
+    debug_assert_eq!(instruction_data.len(), public_key_offset);
+
+    instruction_data.extend_from_slice(&pubkey_bytes);
+
+    debug_assert_eq!(instruction_data.len(), signature_offset);
+
+    instruction_data.extend_from_slice(&signature_bytes);
+
+    debug_assert_eq!(instruction_data.len(), message_data_offset);
+
+    instruction_data.extend_from_slice(message);
+
+    Instruction {
+        program_id: solana_sdk::ed25519_program::id(),
+        accounts: vec![],
+        data: instruction_data,
+    }
+}
+
+
+
 
 pub fn verify(
     data: &[u8],
